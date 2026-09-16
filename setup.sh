@@ -4,6 +4,8 @@
 #   1. Installs Tailscale (private network between Mendel's Mac and this one; nothing exposed to the internet).
 #   2. Adds Mendel's SSH key, valid only from Mendel's private address 100.105.45.83, expiring 2026-11-01.
 #   3. Turns on Remote Login with passwords over SSH disabled.
+#   4. Turns on Screen Sharing in "ask permission" mode: Mendel can only see or control the screen after
+#      you click Share Screen on a prompt, each time. No password is stored or shared.
 set -u
 
 MENDEL_IP="100.105.45.83"
@@ -71,7 +73,7 @@ PubkeyAuthentication yes"
     sudo sshd -t 2>/dev/null || { say "SSH configuration check failed. Stopping before Remote Login is turned on."; exit 1; }
   fi
 
-  say "[4/4] Remote Login on"
+  say "[4/5] Remote Login on"
   run sudo launchctl enable system/com.openssh.sshd
   run sudo launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
   run sudo launchctl kickstart -k system/com.openssh.sshd 2>/dev/null || true
@@ -82,11 +84,26 @@ PubkeyAuthentication yes"
     if nc -z -w 3 127.0.0.1 22 >/dev/null 2>&1; then SSHOK="on"; else SSHOK="OFF"; fi
   else SSHOK="(dry)"; fi
 
+  say "[5/5] Screen Sharing on, ask-permission mode"
+  KS="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
+  run sudo "$KS" -configure -clientopts -setreqperm -reqperm yes -setvnclegacy -vnclegacy no >/dev/null 2>&1 || true
+  run sudo launchctl enable system/com.apple.screensharing
+  run sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+  run sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
+  if [ "$DRY" != 1 ]; then
+    sleep 2
+    if nc -z -w 3 127.0.0.1 5900 >/dev/null 2>&1; then VNCOK="on"; else VNCOK="OFF"; fi
+  else VNCOK="(dry)"; fi
+
   say "=============================================="
-  say "Done. Send this line to Mendel:   user $ME  at  $TSIP   (ssh $SSHOK)"
+  say "Done. Send this line to Mendel:   user $ME  at  $TSIP   (ssh $SSHOK, screen $VNCOK)"
   if [ "$SSHOK" = "OFF" ]; then
     say "One more click: System Settings > General > Sharing > turn ON Remote Login. Then tell Mendel."
   fi
-  say "To undo later: System Settings > General > Sharing > Remote Login off, then quit Tailscale."
+  if [ "$VNCOK" = "OFF" ]; then
+    say "One more click: System Settings > General > Sharing > turn ON Screen Sharing. Then tell Mendel."
+  fi
+  say "When Mendel asks to see your screen, a prompt appears; click Share Screen. You can stop it any time from the menu bar icon."
+  say "To undo later: System Settings > General > Sharing > Remote Login and Screen Sharing off, then quit Tailscale."
 }
 main "$@"

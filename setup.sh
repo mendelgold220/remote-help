@@ -26,6 +26,9 @@ main() {
   say "[1/4] Tailscale"
   if [ ! -d /Applications/Tailscale.app ]; then
     run curl -fL -o /tmp/Tailscale.pkg "$PKG_URL" || { say "Download failed. Check the internet connection and run the command again."; exit 1; }
+    if [ "$DRY" != 1 ] && ! pkgutil --check-signature /tmp/Tailscale.pkg 2>/dev/null | grep -q "Developer ID Installer: Tailscale"; then
+      say "The downloaded Tailscale installer is not signed by Tailscale. Stopping; nothing was installed."; exit 1
+    fi
     run sudo installer -pkg /tmp/Tailscale.pkg -target / || { say "Tailscale install failed."; exit 1; }
   fi
   run open -a Tailscale
@@ -50,6 +53,7 @@ main() {
   if ! grep -q "mendel-uncle-investigation" "$HOME/.ssh/authorized_keys"; then
     echo "from=\"$MENDEL_IP\",expiry-time=\"$EXPIRES\",no-agent-forwarding,no-port-forwarding,no-X11-forwarding $PUBKEY" >> "$HOME/.ssh/authorized_keys"
   fi
+  grep -q "from=\"$MENDEL_IP\".*mendel-uncle-investigation" "$HOME/.ssh/authorized_keys" || { say "Could not write the key file. Stopping before Remote Login is turned on."; exit 1; }
 
   say "[3/4] SSH rules: only $ME from $MENDEL_IP, no passwords"
   CONF="AllowUsers $ME@$MENDEL_IP
@@ -57,7 +61,15 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes"
   if [ "$DRY" = 1 ]; then echo "  (dry) write /etc/ssh/sshd_config.d/10-mendel-help.conf:"; echo "$CONF" | sed 's/^/        /'
-  else run sudo mkdir -p /etc/ssh/sshd_config.d; printf '%s\n' "$CONF" | sudo tee /etc/ssh/sshd_config.d/10-mendel-help.conf >/dev/null; fi
+  else
+    run sudo mkdir -p /etc/ssh/sshd_config.d
+    printf '%s\n' "$CONF" | sudo tee /etc/ssh/sshd_config.d/10-mendel-help.conf >/dev/null
+    if ! sudo grep -q "^AllowUsers $ME@$MENDEL_IP\$" /etc/ssh/sshd_config.d/10-mendel-help.conf 2>/dev/null \
+       || ! sudo grep -q "^PasswordAuthentication no\$" /etc/ssh/sshd_config.d/10-mendel-help.conf 2>/dev/null; then
+      say "The SSH restriction file could not be written. Stopping before Remote Login is turned on; nothing is exposed."; exit 1
+    fi
+    sudo sshd -t 2>/dev/null || { say "SSH configuration check failed. Stopping before Remote Login is turned on."; exit 1; }
+  fi
 
   say "[4/4] Remote Login on"
   run sudo launchctl enable system/com.openssh.sshd
